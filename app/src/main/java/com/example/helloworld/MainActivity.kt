@@ -1,9 +1,13 @@
-import android.app.Activity
+package com.example.helloworld
+
 import com.example.helloworld.R
+import android.Manifest
+import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -12,6 +16,7 @@ import android.view.View
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
+import android.widget.Toast
 import android.widget.VideoView
 import java.io.File
 import java.text.SimpleDateFormat
@@ -44,10 +49,14 @@ class MainActivity : Activity() {
         val settingsButton: Button = findViewById(R.id.settingsButton)
         styleFocusableButton(settingsButton)
         settingsButton.setOnClickListener {
-            startActivity(Intent(Settings.ACTION_SETTINGS))
+            try {
+                startActivity(Intent(Settings.ACTION_SETTINGS))
+            } catch (e: Exception) {
+                Toast.makeText(this, "Cannot open Settings", Toast.LENGTH_SHORT).show()
+            }
         }
 
-        setupLiveWallpaper()
+        requestStorageAndSetupWallpaper()
         populateInstalledApps()
     }
 
@@ -55,8 +64,11 @@ class MainActivity : Activity() {
         super.onResume()
         uiHandler.removeCallbacks(clockRunnable)
         uiHandler.post(clockRunnable)
-        if (!wallpaperVideoView.isPlaying) {
-            wallpaperVideoView.start()
+        try {
+            if (!wallpaperVideoView.isPlaying) {
+                wallpaperVideoView.start()
+            }
+        } catch (_: Exception) {
         }
     }
 
@@ -67,18 +79,49 @@ class MainActivity : Activity() {
 
     @Deprecated("Keep launcher active on TV home screen")
     override fun onBackPressed() {
-        // Intentionally absorbed so pressing Back stays in Radion Launcher
+        // Stay on Radion Launcher
+    }
+
+    private fun requestStorageAndSetupWallpaper() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
+            checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED
+        ) {
+            requestPermissions(arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE), 101)
+        } else {
+            setupLiveWallpaper()
+        }
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int,
+        permissions: Array<out String>,
+        grantResults: IntArray
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode == 101 && grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+            setupLiveWallpaper()
+        }
     }
 
     private fun setupLiveWallpaper() {
-        val videoFile = File("/sdcard/Download/wallpaper.mp4")
-        if (videoFile.exists()) {
-            wallpaperVideoView.setVideoPath(videoFile.absolutePath)
-            wallpaperVideoView.setOnPreparedListener { mp ->
-                mp.isLooping = true
-                mp.setVolume(0f, 0f)
-                wallpaperVideoView.start()
+        try {
+            val videoFile = File("/sdcard/Download/wallpaper.mp4")
+            if (videoFile.exists() && videoFile.canRead()) {
+                wallpaperVideoView.setVideoPath(videoFile.absolutePath)
+                wallpaperVideoView.setOnPreparedListener { mp ->
+                    mp.isLooping = true
+                    mp.setVolume(0f, 0f)
+                    wallpaperVideoView.start()
+                }
+                wallpaperVideoView.setOnErrorListener { _, _, _ ->
+                    wallpaperVideoView.visibility = View.GONE
+                    true
+                }
+            } else {
+                wallpaperVideoView.visibility = View.GONE
             }
+        } catch (_: Exception) {
+            wallpaperVideoView.visibility = View.GONE
         }
     }
 
@@ -86,43 +129,51 @@ class MainActivity : Activity() {
         appsRowContainer.removeAllViews()
         val pm = packageManager
 
-        val mainIntent = Intent(Intent.ACTION_MAIN, null).apply {
-            addCategory(Intent.CATEGORY_LEANBACK_LAUNCHER)
-        }
+        try {
+            val leanbackIntent = Intent(Intent.ACTION_MAIN, null).apply {
+                addCategory(Intent.CATEGORY_LEANBACK_LAUNCHER)
+            }
+            val standardIntent = Intent(Intent.ACTION_MAIN, null).apply {
+                addCategory(Intent.CATEGORY_LAUNCHER)
+            }
 
-        val resolveInfos = pm.queryIntentActivities(mainIntent, PackageManager.MATCH_ALL)
-            .sortedBy { it.loadLabel(pm).toString().lowercase(Locale.getDefault()) }
+            val combined = (pm.queryIntentActivities(leanbackIntent, 0) +
+                pm.queryIntentActivities(standardIntent, 0))
+                .distinctBy { it.activityInfo.packageName }
+                .sortedBy { it.loadLabel(pm).toString().lowercase(Locale.getDefault()) }
 
-        for (info in resolveInfos) {
-            val pkgName = info.activityInfo.packageName
-            if (pkgName == packageName) continue
+            for (info in combined) {
+                val pkgName = info.activityInfo.packageName
+                if (pkgName == packageName) continue
 
-            val label = info.loadLabel(pm).toString()
-            val tileButton = Button(this).apply {
-                text = label
-                textSize = 18f
-                setTextColor(Color.WHITE)
-                minWidth = 240
-                minHeight = 140
-                isFocusable = true
-                isFocusableInTouchMode = true
-                val params = LinearLayout.LayoutParams(
-                    LinearLayout.LayoutParams.WRAP_CONTENT,
-                    LinearLayout.LayoutParams.WRAP_CONTENT
-                ).apply {
-                    rightMargin = 20
-                }
-                layoutParams = params
-                setOnClickListener {
-                    val launchIntent = pm.getLaunchIntentForPackage(pkgName)
-                        ?: pm.getLeanbackLaunchIntentForPackage(pkgName)
-                    if (launchIntent != null) {
-                        startActivity(launchIntent)
+                val label = info.loadLabel(pm).toString()
+                val tileButton = Button(this).apply {
+                    text = label
+                    textSize = 18f
+                    setTextColor(Color.WHITE)
+                    minWidth = 240
+                    minHeight = 140
+                    isFocusable = true
+                    isFocusableInTouchMode = true
+                    layoutParams = LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.WRAP_CONTENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT
+                    ).apply {
+                        rightMargin = 20
+                    }
+                    setOnClickListener {
+                        val launchIntent = pm.getLeanbackLaunchIntentForPackage(pkgName)
+                            ?: pm.getLaunchIntentForPackage(pkgName)
+                        if (launchIntent != null) {
+                            startActivity(launchIntent)
+                        }
                     }
                 }
+                styleFocusableButton(tileButton)
+                appsRowContainer.addView(tileButton)
             }
-            styleFocusableButton(tileButton)
-            appsRowContainer.addView(tileButton)
+        } catch (e: Exception) {
+            Toast.makeText(this, "Error loading apps: ${e.message}", Toast.LENGTH_LONG).show()
         }
     }
 
@@ -131,7 +182,10 @@ class MainActivity : Activity() {
             val bg = GradientDrawable().apply {
                 cornerRadius = 18f
                 setColor(if (hasFocus) Color.parseColor("#1D4ED8") else Color.parseColor("#161B22"))
-                setStroke(if (hasFocus) 5 else 2, if (hasFocus) Color.parseColor("#60A5FA") else Color.parseColor("#30363D"))
+                setStroke(
+                    if (hasFocus) 5 else 2,
+                    if (hasFocus) Color.parseColor("#60A5FA") else Color.parseColor("#30363D")
+                )
             }
             view.background = bg
             val scale = if (hasFocus) 1.06f else 1.0f
