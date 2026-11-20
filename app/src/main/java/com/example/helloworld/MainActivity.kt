@@ -1,4 +1,5 @@
 import android.app.Activity
+package com.example.helloworld
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
